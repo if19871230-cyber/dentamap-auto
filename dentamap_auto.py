@@ -21,8 +21,6 @@ import sys
 import tempfile
 import time
 import traceback
-from html.parser import HTMLParser
-from urllib.parse import urljoin
 
 import requests
 
@@ -98,76 +96,46 @@ def save_config(cfg):
 
 
 # ---------------------------------------------------------------- ログイン
-class _FormParser(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.forms, self._cur = [], None
-
-    def handle_starttag(self, tag, attrs):
-        a = dict(attrs)
-        if tag == "form":
-            self._cur = {"action": a.get("action", ""), "method": (a.get("method") or "get").lower(), "inputs": []}
-            self.forms.append(self._cur)
-        elif tag == "input" and self._cur is not None:
-            self._cur["inputs"].append(a)
-
-    def handle_endtag(self, tag):
-        if tag == "form":
-            self._cur = None
-
-
-def _is_login_page(resp):
-    return "index.php" in resp.url or 'type="password"' in resp.text or "type='password'" in resp.text
+LOGIN_API = BASE + "dmp_first_login.php"
+LOGIN_ERRORS = {
+    "dp_type6_err": "料金のお支払いが確認できなかったため、デンタマップが使えない状態です",
+    "dp_sys_err": "デンタマップ側のエラーです",
+}
 
 
 def login(s: requests.Session, user: str, password: str):
-    r = s.get(LOGIN_URL, timeout=30)
-    r.encoding = r.apparent_encoding or "utf-8"
-    p = _FormParser()
-    p.feed(r.text)
-    form = next((f for f in p.forms if any((i.get("type") or "").lower() == "password" for i in f["inputs"])), None)
-    if form is None:
-        raise RuntimeError("ログイン画面の入力欄が見つかりません（デンタマップの画面が変わった可能性があります）")
-    data, user_set = {}, False
-    for i in form["inputs"]:
-        name, typ = i.get("name"), (i.get("type") or "text").lower()
-        if not name:
-            continue
-        if typ == "password":
-            data[name] = password
-        elif typ in ("text", "email", "") and not user_set:
-            data[name] = user
-            user_set = True
-        elif typ in ("hidden", "submit"):
-            data[name] = i.get("value", "")
-        elif typ == "checkbox" and "checked" in i:
-            data[name] = i.get("value", "on")
-    action = urljoin(r.url, form["action"] or r.url)
-    if form["method"] == "post":
-        r2 = s.post(action, data=data, timeout=30, allow_redirects=True)
-    else:
-        r2 = s.get(action, params=data, timeout=30, allow_redirects=True)
-    check = s.get(MAIN_URL, timeout=30, allow_redirects=True)
-    check.encoding = check.apparent_encoding or "utf-8"
-    if _is_login_page(check):
-        raise RuntimeError("ログインできませんでした（IDかパスワードが違う、またはログインの仕組みが変わった可能性があります）")
+    """ログイン画面のボタンと同じ通信（dmp_first_login.php に u / p を送る）でログインする。"""
+    s.get(LOGIN_URL, timeout=30)
+    r = s.post(LOGIN_API, data={"u": user, "p": password}, timeout=30,
+               headers={"X-Requested-With": "XMLHttpRequest", "Referer": LOGIN_URL})
+    try:
+        res = r.json()
+    except ValueError:
+        raise RuntimeError("ログインの応答を読めませんでした（デンタマップの仕組みが変わった可能性があります） HTTP %s" % r.status_code)
+    err = str((res.get("data") or {}).get("err_type") or "")
+    if err in LOGIN_ERRORS:
+        raise RuntimeError("%s：%s" % (LOGIN_ERRORS[err], res.get("err_text") or (res.get("data") or {}).get("err_text") or ""))
+    if str(res.get("res")) != "1":
+        raise RuntimeError("ログインできませんでした（ユーザー名かパスワードが違う可能性があります）")
     log("ログインしました")
 
 
 # ---------------------------------------------------------------- ダウンロード
 def _download(s: requests.Session, params: dict, ok) -> bytes:
-    """画面のダウンロードボタンと同じ順番（受付 → 取得）で取る。"""
+    """画面のダウンロードと同じ download_file_load.html から取る。取れないときは受付処理を挟んで再試行。"""
     for attempt in range(3):
-        try:
-            s.post(SESSION_URL, data=params, timeout=60)
-        except requests.RequestException:
-            pass
+        if attempt:
+            try:
+                s.post(SESSION_URL, timeout=60)
+            except requests.RequestException:
+                pass
+            time.sleep(5 * attempt)
         q = dict(params)
         q["r"] = str(int(time.time() * 1000))
         r = s.get(LOAD_URL, params=q, timeout=180)
         if r.status_code == 200 and ok(r.content):
             return r.content
-        time.sleep(5 * (attempt + 1))
+        log("取得をやり直します（%s, HTTP %s, %dバイト）" % (params, r.status_code, len(r.content)))
     raise RuntimeError("ダウンロードに失敗しました: %s" % params)
 
 
