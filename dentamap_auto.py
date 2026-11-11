@@ -173,10 +173,13 @@ def _is_future_html(b: bytes):
     return b'id="csv_data"' in b
 
 
-def run_once():
+def run_once(scheduled: bool = False):
     cfg = load_config()
     if not cfg:
         raise RuntimeError("設定がありません。先に DentamapAuto.exe をダブルクリックして設定してください。")
+    if scheduled and cfg.get("skip_sunday", True) and dt.date.today().weekday() == 6:
+        log("日曜日なので取得しません")
+        return
     out = cfg["folder"]
     month_dir = os.path.join(out, "月次")
     future_dir = os.path.join(out, "未来分")
@@ -221,15 +224,21 @@ def exe_path():
     return sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__)
 
 
-def register_task(hhmm: str):
+def register_task(hhmm: str, skip_sunday: bool = True):
     exe = exe_path()
     cmd, args = (exe, "--run") if getattr(sys, "frozen", False) else (sys.executable, '"%s" --run' % exe)
     start = "%sT%s:00" % (dt.date.today().isoformat(), hhmm)
+    if skip_sunday:
+        schedule = ("<ScheduleByWeek><WeeksInterval>1</WeeksInterval><DaysOfWeek>"
+                    "<Monday/><Tuesday/><Wednesday/><Thursday/><Friday/><Saturday/>"
+                    "</DaysOfWeek></ScheduleByWeek>")
+    else:
+        schedule = "<ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay>"
     xml = f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>デンタマップ予約データの自動取得</Description></RegistrationInfo>
   <Triggers><CalendarTrigger><StartBoundary>{start}</StartBoundary><Enabled>true</Enabled>
-    <ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay></CalendarTrigger></Triggers>
+    {schedule}</CalendarTrigger></Triggers>
   <Principals><Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
   <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
@@ -285,6 +294,9 @@ def setup_gui():
     e_time.insert(0, cfg.get("time", "20:00"))
     e_time.grid(row=4, column=1, sticky="w", **pad)
 
+    v_sun = tk.BooleanVar(value=cfg.get("skip_sunday", True))
+    tk.Checkbutton(root, text="日曜日は取得しない", variable=v_sun).grid(row=4, column=1, columnspan=2, sticky="e", **pad)
+
     status = tk.Label(root, text="", fg="blue", wraplength=420, justify="left")
     status.grid(row=6, column=0, columnspan=3, sticky="w", **pad)
 
@@ -295,7 +307,7 @@ def setup_gui():
         if not pw and not cfg.get("password"):
             raise ValueError("パスワードを入れてください")
         new = {"user": user, "folder": folder, "time": "%02d:%s" % (int(hhmm.split(":")[0]), hhmm.split(":")[1]),
-               "password": protect(pw) if pw else cfg["password"]}
+               "password": protect(pw) if pw else cfg["password"], "skip_sunday": bool(v_sun.get())}
         return new
 
     def on_save():
@@ -303,8 +315,9 @@ def setup_gui():
             new = collect()
             save_config(new)
             cfg.update(new)
-            register_task(new["time"])
-            messagebox.showinfo("登録しました", "毎日 %s に自動で取得します。\n「今すぐテスト」で一度動作を確認してください。" % new["time"])
+            register_task(new["time"], new["skip_sunday"])
+            days = "月〜土曜日" if new["skip_sunday"] else "毎日"
+            messagebox.showinfo("登録しました", "%s の %s に自動で取得します。\n「今すぐテスト」で一度動作を確認してください。" % (days, new["time"]))
         except Exception as e:
             messagebox.showerror("エラー", str(e))
 
@@ -330,7 +343,7 @@ def setup_gui():
 def main():
     if "--run" in sys.argv:
         try:
-            run_once()
+            run_once(scheduled=True)
         except Exception as e:
             log("失敗: %s\n%s" % (e, traceback.format_exc()))
             cfg = load_config()
