@@ -11,9 +11,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install requests pyinstaller
-      - run: pyinstaller --onefile --noconsole --name DentamapAuto dentamap_auto.py
+      # PyInstaller の起動部分を自前でビルドし直す（配布済みの起動部分はウイルス対策ソフトに誤検知されやすいため）
+      - name: Install PyInstaller (bootloader built from source)
+        env:
+          PYINSTALLER_COMPILE_BOOTLOADER: "1"
+        run: |
+          pip install requests
+          pip install --no-binary pyinstaller pyinstaller
+      # 1ファイル形式（--onefile）は誤検知されやすいので、フォルダ形式で作る
+      - run: pyinstaller --onedir --noconsole --noupx --name DentamapAuto dentamap_auto.py
       - uses: actions/upload-artifact@v4
         with:
           name: DentamapAuto
-          path: dist/DentamapAuto.exe
+          path: dist/DentamapAuto/
