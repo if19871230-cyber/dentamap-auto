@@ -351,6 +351,16 @@ def main():
                     pass
             sys.exit(1)
     else:
+        p = exe_path().lower()
+        if getattr(sys, "frozen", False) and ".zip" in p and "\\temp\\" in p:
+            import tkinter as tk
+            from tkinter import messagebox
+            tk.Tk().withdraw()
+            messagebox.showwarning(
+                "ZIPを展開してください",
+                "ZIPの中から直接開いています。\n\nZIPを右クリック →「すべて展開」で取り出し、"
+                "取り出した DentamapAuto.exe を C:\\DentamapAuto などの決まった場所に置いてから開いてください。")
+            return
         setup_gui()
 
 
