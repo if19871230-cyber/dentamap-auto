@@ -1,7 +1,7 @@
 /**
  * デンタマップ予約データ 自動取得（Google Apps Script 版）
  *
- * 毎晩、Googleドライブの「デンタマップ予約データ」フォルダに次を保存する。
+ * 毎晩、Googleドライブの保存先フォルダ（ROOT_FOLDER_ID）に次を保存する。
  *   月次/YYYYMMデータ.csv          … 先月・今月（バックアップ画面「過去分」csv形式と同じ）
  *   未来分/yoyaku_dataYYYYMMDD.csv … 180日分（「未来分」HTMLの「CSVダウンロード」と同じ）。毎日分を残す
  *   予約データ_最新.csv             … 月次＋最新の未来分を1つにまとめたもの（集計.gs）
@@ -19,7 +19,8 @@
  */
 
 var BASE = 'https://plus.dentamap.jp/apl/';
-var ROOT_FOLDER_NAME = 'デンタマップ予約データ';
+// 保存先のGoogleドライブのフォルダ（URLの folders/ のあとの文字列）
+var ROOT_FOLDER_ID = '10ALFQnnZZIMuNiStyxROwZiW-IY4ljLy';
 var FUTURE_DAYS = 180;
 var PRINT_FLG = '1,1,1,1,1,1,0,0,0';
 var RUN_HOUR = 17;
@@ -97,7 +98,7 @@ function doGet() {
   var msg, ok = true;
   try {
     fetchAll_();
-    msg = '取得しました。Googleドライブの「' + ROOT_FOLDER_NAME + '」フォルダを確認してください。';
+    msg = '取得しました。保存先：https://drive.google.com/drive/folders/' + ROOT_FOLDER_ID;
   } catch (e) {
     ok = false;
     writeStatus_('失敗：' + e.message);
@@ -117,7 +118,7 @@ function doGet() {
 function fetchAll_() {
   var c = new DentamapClient_();
   var info = c.login();
-  var root = getFolder_(DriveApp.getRootFolder(), ROOT_FOLDER_NAME);
+  var root = getRoot_();
   var monthDir = getFolder_(root, '月次');
   var futureDir = getFolder_(root, '未来分');
 
@@ -253,6 +254,14 @@ DentamapClient_.prototype.download = function (info, kind, params, ok) {
 
 // ------------------------------------------------------------ ドライブ
 
+function getRoot_() {
+  try {
+    return DriveApp.getFolderById(ROOT_FOLDER_ID);
+  } catch (e) {
+    throw new Error('保存先フォルダを開けません（ROOT_FOLDER_ID を確認してください）：' + ROOT_FOLDER_ID);
+  }
+}
+
 function getFolder_(parent, name) {
   var it = parent.getFoldersByName(name);
   return it.hasNext() ? it.next() : parent.createFolder(name);
@@ -265,7 +274,7 @@ function saveFile_(folder, name, blob) {
 }
 
 function writeStatus_(text) {
-  var root = getFolder_(DriveApp.getRootFolder(), ROOT_FOLDER_NAME);
+  var root = getRoot_();
   var stamp = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm');
   saveFile_(root, '最終取得.txt', Utilities.newBlob('最終取得 ' + stamp + '　' + text + '\n', 'text/plain'));
 }
