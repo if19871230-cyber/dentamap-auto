@@ -11,7 +11,9 @@
  *        DENTAMAP_USER（ユーザー名）と DENTAMAP_PASS（パスワード）を登録
  *   2. 関数 testLogin を実行（初回は権限の承認が出る）→ 実行ログに「ログイン成功」
  *   3. 関数 runNow を実行 → ドライブにCSVができることを確認
- *   4. 関数 setupTrigger を実行 → 毎日20時台に自動実行（日曜は取らない）
+ *   4. 関数 setupTrigger を実行 → 月〜土の17:30に自動実行
+ *   5. （任意）「デプロイ → 新しいデプロイ → ウェブアプリ」で公開すると、
+ *      そのURLを開くだけで「今すぐ取得」できる（実行ユーザー：自分、アクセス：自分のみ）
  */
 
 var BASE = 'https://plus.dentamap.jp/apl/';
@@ -19,7 +21,8 @@ var ROOT_FOLDER_NAME = 'デンタマップ予約データ';
 var FUTURE_DAYS = 180;
 var PRINT_FLG = '1,1,1,1,1,1,0,0,0';
 var KEEP_FUTURE_FILES = 14;
-var RUN_HOUR = 20;
+var RUN_HOUR = 17;
+var RUN_MINUTE = 30;
 var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
 
 // ------------------------------------------------------------ 実行用の関数
@@ -36,13 +39,9 @@ function runNow() {
   fetchAll_();
 }
 
-/** 毎日のトリガーから呼ばれる */
+/** 決まった時刻（月〜土 17:30）に呼ばれる */
 function dailyJob() {
-  var today = new Date();
-  if (today.getDay() === 0) {
-    Logger.log('日曜日なので取得しません');
-    return;
-  }
+  cleanupOneTimeTriggers_();
   try {
     fetchAll_();
   } catch (e) {
@@ -54,14 +53,62 @@ function dailyJob() {
   }
 }
 
-/** 毎日の自動実行を登録する（何度実行しても1つだけになる） */
+/**
+ * 毎日16時台に呼ばれ、その日の17:30ちょうどに dailyJob を予約する。
+ * （GASの「毎日○時」は1時間の幅でしか指定できないため、この2段構えで時刻を合わせる）
+ * 日曜日は予約しない。
+ */
+function scheduleToday() {
+  cleanupOneTimeTriggers_();
+  var now = new Date();
+  if (now.getDay() === 0) {
+    Logger.log('日曜日なので予約しません');
+    return;
+  }
+  var at = new Date(now.getFullYear(), now.getMonth(), now.getDate(), RUN_HOUR, RUN_MINUTE, 0);
+  if (at.getTime() <= now.getTime()) at = new Date(now.getTime() + 60 * 1000);
+  ScriptApp.newTrigger('dailyJob').timeBased().at(at).create();
+  Logger.log('本日 ' + Utilities.formatDate(at, 'Asia/Tokyo', 'HH:mm') + ' に取得を予約しました');
+}
+
+/** 自動実行を登録する（何度実行しても1組だけになる） */
 function setupTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    var f = t.getHandlerFunction();
+    if (f === 'dailyJob' || f === 'scheduleToday') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('scheduleToday').timeBased().atHour(RUN_HOUR - 1).everyDays(1)
+    .inTimezone('Asia/Tokyo').create();
+  Logger.log('月〜土の ' + RUN_HOUR + ':' + ('0' + RUN_MINUTE).slice(-2) + ' に自動で取得します');
+  var now = new Date();
+  if (now.getHours() === RUN_HOUR - 1 || (now.getHours() === RUN_HOUR && now.getMinutes() < RUN_MINUTE)) scheduleToday();
+}
+
+function cleanupOneTimeTriggers_() {
+  // 実行済みの「その日だけ」の予約（dailyJob）を片付ける
   ScriptApp.getProjectTriggers().forEach(function (t) {
     if (t.getHandlerFunction() === 'dailyJob') ScriptApp.deleteTrigger(t);
   });
-  ScriptApp.newTrigger('dailyJob').timeBased().atHour(RUN_HOUR).everyDays(1)
-    .inTimezone('Asia/Tokyo').create();
-  Logger.log('毎日 ' + RUN_HOUR + '時台に自動で取得します（日曜は取得しません）');
+}
+
+/** ウェブアプリのURLを開いたときに呼ばれる：今すぐ取得して結果を表示 */
+function doGet() {
+  var msg, ok = true;
+  try {
+    fetchAll_();
+    msg = '取得しました。Googleドライブの「' + ROOT_FOLDER_NAME + '」フォルダを確認してください。';
+  } catch (e) {
+    ok = false;
+    writeStatus_('失敗：' + e.message);
+    msg = '取得に失敗しました：' + e.message;
+  }
+  var stamp = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm');
+  return HtmlService.createHtmlOutput(
+    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<div style="font-family:sans-serif;padding:24px;font-size:18px">' +
+    '<h2 style="color:' + (ok ? '#1a7f37' : '#c0392b') + '">' + (ok ? '✓ 取得完了' : '✗ 取得失敗') + '</h2>' +
+    '<p>' + msg.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</p><p style="color:#666">' + stamp + '</p></div>'
+  ).setTitle('デンタマップ 今すぐ取得');
 }
 
 // ------------------------------------------------------------ 取得の本体
