@@ -3,7 +3,9 @@
  *
  * 毎晩、Googleドライブの「デンタマップ予約データ」フォルダに次を保存する。
  *   月次/YYYYMMデータ.csv          … 先月・今月（バックアップ画面「過去分」csv形式と同じ）
- *   未来分/yoyaku_dataYYYYMMDD.csv … 180日分（「未来分」HTMLの「CSVダウンロード」と同じ）
+ *   未来分/yoyaku_dataYYYYMMDD.csv … 180日分（「未来分」HTMLの「CSVダウンロード」と同じ）。毎日分を残す
+ *   予約データ_最新.csv             … 月次＋最新の未来分を1つにまとめたもの（集計.gs）
+ *   予約の埋まり具合_YYYY.csv       … その日時点で先の予約がどれだけ埋まっているかの記録（集計.gs）
  *   最終取得.txt                    … 最後の取得日時と成功／失敗
  *
  * 初回の設定
@@ -20,7 +22,6 @@ var BASE = 'https://plus.dentamap.jp/apl/';
 var ROOT_FOLDER_NAME = 'デンタマップ予約データ';
 var FUTURE_DAYS = 180;
 var PRINT_FLG = '1,1,1,1,1,1,0,0,0';
-var KEEP_FUTURE_FILES = 14;
 var RUN_HOUR = 17;
 var RUN_MINUTE = 30;
 var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
@@ -141,12 +142,12 @@ function fetchAll_() {
   saveFile_(futureDir, 'yoyaku_data' + ymd + '.csv', Utilities.newBlob(csvBytes, 'text/csv'));
   Logger.log('未来分CSVを保存: ' + ymd + '（' + (csv.split('\n').length - 2) + '行）');
 
-  cleanupFuture_(futureDir);
+  buildSummaries_(root, monthDir, csv, now);   // 集計.gs
   writeStatus_('成功');
 }
 
 function isMonthCsv_(bytes) {
-  return Utilities.newBlob(bytes).getDataAsString('Shift_JIS').indexOf('予約明細') >= 0;
+  return Utilities.newBlob(bytes).getDataAsString('Windows-31J').indexOf('予約明細') >= 0;
 }
 
 function isFutureHtml_(bytes) {
@@ -261,17 +262,6 @@ function saveFile_(folder, name, blob) {
   var it = folder.getFilesByName(name);
   while (it.hasNext()) it.next().setTrashed(true);
   folder.createFile(blob.setName(name));
-}
-
-function cleanupFuture_(folder) {
-  var files = [];
-  var it = folder.getFiles();
-  while (it.hasNext()) {
-    var f = it.next();
-    if (/^yoyaku_data\d{8}\.csv$/.test(f.getName())) files.push(f);
-  }
-  files.sort(function (a, b) { return a.getName() < b.getName() ? -1 : 1; });
-  files.slice(0, Math.max(0, files.length - KEEP_FUTURE_FILES)).forEach(function (f) { f.setTrashed(true); });
 }
 
 function writeStatus_(text) {
